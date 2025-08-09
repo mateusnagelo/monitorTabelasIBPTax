@@ -17,11 +17,24 @@ import pandas as pd
 import requests
 
 
+# Metadados do aplicativo
+APP_NAME = "MonitorTabelaIBPTax"
+APP_VERSION = "1.0.2"
+APP_DEVELOPER = "Mateus Angelo"
+# Texto de exibição (bandeja/notificações)
+APP_DISPLAY = f"Monitor de Tabelas IBPTax v{APP_VERSION}"
+
+
 DOWNLOAD_URL = "https://www.concity.com.br/arquivos/599da4243044a07f6b3a9986d46c35b2.csv"
 ARQUIVOS_ORIGINAIS = [
     "TabelaIBPTaxBA15.1.B.csv",
     "TabelaIBPTax15.1.B.csv",
 ]
+
+# Metadados do aplicativo
+APP_NAME = "MonitorTabelaIBPTax"
+APP_VERSION = "1.0.2"
+APP_DEVELOPER = "Mateus Angelo"
 
 
 def ler_csv(caminho_arquivo: Path) -> pd.DataFrame:
@@ -165,7 +178,7 @@ def _resolve_base_dir() -> Path:
 
 
 def _setup_logging(base_dir: Path) -> None:
-    log_path = base_dir / "monitor_tabelas.log"
+    log_path = base_dir / f"{APP_NAME}.log"
     handler = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
     logging.basicConfig(
         level=logging.INFO,
@@ -173,11 +186,13 @@ def _setup_logging(base_dir: Path) -> None:
         handlers=[handler],
         force=True,
     )
+    logging.info("%s v%s por %s", APP_NAME, APP_VERSION, APP_DEVELOPER)
+    logging.info("%s v%s por %s", APP_NAME, APP_VERSION, APP_DEVELOPER)
     logging.info("Log iniciado em %s", log_path)
 
 
 def _acquire_lock(base_dir: Path) -> Path:
-    lock_path = base_dir / "monitor_tabelas.lock"
+    lock_path = base_dir / f"{APP_NAME}.lock"
     # Implementação simples: criar com 'x' para evitar múltiplas instâncias
     try:
         with open(lock_path, "x", encoding="utf-8") as f:
@@ -216,8 +231,8 @@ def executar_em_background(base_dir: Path, intervalo_minutos: int, stop_event: O
         logging.error("%s", exc)
         return 1
 
-    logging.info("Monitor iniciado em background. Intervalo: %d minutos", intervalo_minutos)
-    print(f"[INFO] Monitor iniciado em background. Intervalo: {intervalo_minutos} minuto(s). Logs em 'monitor_tabelas.log'.")
+    logging.info("%s iniciado em background. Intervalo: %d minutos", APP_NAME, intervalo_minutos)
+    print(f"[INFO] {APP_NAME} iniciado em background. Intervalo: {intervalo_minutos} minuto(s). Logs em '{APP_NAME}.log'.")
     try:
         if stop_event is None:
             stop_event = Event()
@@ -250,7 +265,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def _is_already_running(base_dir: Path) -> bool:
-    return (base_dir / "monitor_tabelas.lock").exists()
+    antigo = base_dir / "monitor_tabelas.lock"
+    novo = base_dir / f"{APP_NAME}.lock"
+    return antigo.exists() or novo.exists()
 
 
 def _message_box_info(title: str, message: str) -> None:
@@ -298,7 +315,7 @@ def executar_com_tray(base_dir: Path, intervalo_minutos: int) -> int:
             subprocess.Popen(["explorer", str(base_dir)])
 
     def acao_abrir_log(icon, item):  # noqa: ARG001
-        log_path = base_dir / "monitor_tabelas.log"
+        log_path = base_dir / f"{APP_NAME}.log"
         try:
             os.startfile(str(log_path))  # type: ignore[attr-defined]
         except Exception:
@@ -324,7 +341,7 @@ def executar_com_tray(base_dir: Path, intervalo_minutos: int) -> int:
         MenuItem("Abrir log", acao_abrir_log),
         MenuItem("Sair", acao_sair),
     )
-    icon = pystray.Icon(name="monitor_tabelas", title="Monitor Tabelas IBPTax", icon=image, menu=menu)
+    icon = pystray.Icon(name=APP_NAME.lower(), title=APP_DISPLAY, icon=image, menu=menu)
 
     try:
         def on_ready(icon_: "pystray.Icon") -> None:
@@ -332,11 +349,29 @@ def executar_com_tray(base_dir: Path, intervalo_minutos: int) -> int:
                 icon_.visible = True
             except Exception:
                 pass
-            # Notifica que iniciou com sucesso
+            # Notifica que iniciou com sucesso, com fallbacks
+            notified = False
             try:
-                icon_.notify("Monitor iniciado com sucesso.", "Monitor Tabelas IBPTax")
+                icon_.notify("Monitor iniciado com sucesso.", APP_DISPLAY)
+                notified = True
             except Exception:
-                pass
+                notified = False
+            if not notified:
+                try:
+                    from win10toast import ToastNotifier
+
+                    toaster = ToastNotifier()
+                    toaster.show_toast(
+                        APP_DISPLAY,
+                        "Monitor iniciado com sucesso.",
+                        duration=5,
+                        threaded=True,
+                    )
+                    notified = True
+                except Exception:
+                    notified = False
+            if not notified:
+                _message_box_info(APP_DISPLAY, "Monitor iniciado com sucesso.")
 
         icon.run(setup=on_ready)
     finally:
@@ -354,7 +389,7 @@ def main() -> int:
         return executar_uma_vez(base_dir)
     # Se já estiver rodando, avisa e sai
     if _is_already_running(base_dir):
-        _message_box_info("Monitor Tabelas IBPTax", "O monitor já está em execução.")
+        _message_box_info(APP_NAME, "O monitor já está em execução.")
         print("[INFO] O monitor já está em execução.")
         logging.info("O monitor já está em execução. Encerrando nova instância.")
         return 0
