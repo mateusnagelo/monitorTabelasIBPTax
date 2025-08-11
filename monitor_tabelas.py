@@ -12,17 +12,10 @@ from pathlib import Path
 from typing import Optional, Tuple
 from threading import Event, Thread
 import subprocess
+import winreg
 
 import pandas as pd
 import requests
-
-
-# Metadados do aplicativo
-APP_NAME = "MonitorTabelaIBPTax"
-APP_VERSION = "1.0.2"
-APP_DEVELOPER = "Mateus Angelo"
-# Texto de exibição (bandeja/notificações)
-APP_DISPLAY = f"Monitor de Tabelas IBPTax v{APP_VERSION}"
 
 
 DOWNLOAD_URL = "https://www.concity.com.br/arquivos/599da4243044a07f6b3a9986d46c35b2.csv"
@@ -35,6 +28,75 @@ ARQUIVOS_ORIGINAIS = [
 APP_NAME = "MonitorTabelaIBPTax"
 APP_VERSION = "1.0.2"
 APP_DEVELOPER = "Mateus Angelo"
+# Texto de exibição (bandeja/notificações)
+APP_DISPLAY = f"Monitor de Tabelas IBPTax v{APP_VERSION}"
+
+
+def _get_startup_key():
+    """Retorna a chave de registro do startup do Windows."""
+    try:
+        return winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0,
+            winreg.KEY_READ | winreg.KEY_WRITE
+        )
+    except Exception:
+        return None
+
+
+def _is_in_startup() -> bool:
+    """Verifica se o programa está no inicializador do Windows."""
+    key = _get_startup_key()
+    if not key:
+        return False
+    try:
+        winreg.QueryValueEx(key, APP_NAME)
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        try:
+            winreg.CloseKey(key)
+        except Exception:
+            pass
+
+
+def _add_to_startup() -> bool:
+    """Adiciona o programa ao inicializador do Windows."""
+    key = _get_startup_key()
+    if not key:
+        return False
+    try:
+        exe_path = str(Path(sys.executable).resolve())
+        winreg.SetValueEx(key, APP_NAME, 0, winreg.REG_SZ, f'"{exe_path}"')
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            winreg.CloseKey(key)
+        except Exception:
+            pass
+
+
+def _remove_from_startup() -> bool:
+    """Remove o programa do inicializador do Windows."""
+    key = _get_startup_key()
+    if not key:
+        return False
+    try:
+        winreg.DeleteValue(key, APP_NAME)
+        return True
+    except FileNotFoundError:
+        return True  # Já não estava lá
+    except Exception:
+        return False
+    finally:
+        try:
+            winreg.CloseKey(key)
+        except Exception:
+            pass
 
 
 def ler_csv(caminho_arquivo: Path) -> pd.DataFrame:
@@ -187,7 +249,6 @@ def _setup_logging(base_dir: Path) -> None:
         force=True,
     )
     logging.info("%s v%s por %s", APP_NAME, APP_VERSION, APP_DEVELOPER)
-    logging.info("%s v%s por %s", APP_NAME, APP_VERSION, APP_DEVELOPER)
     logging.info("Log iniciado em %s", log_path)
 
 
@@ -321,6 +382,30 @@ def executar_com_tray(base_dir: Path, intervalo_minutos: int) -> int:
         except Exception:
             subprocess.Popen(["notepad", str(log_path)])
 
+    def acao_startup(icon, item):  # noqa: ARG001
+        if _is_in_startup():
+            if _remove_from_startup():
+                try:
+                    icon.notify("Removido do inicializador do Windows.", APP_DISPLAY)
+                except Exception:
+                    _message_box_info(APP_DISPLAY, "Removido do inicializador do Windows.")
+            else:
+                try:
+                    icon.notify("Erro ao remover do inicializador.", APP_DISPLAY)
+                except Exception:
+                    _message_box_info(APP_DISPLAY, "Erro ao remover do inicializador.")
+        else:
+            if _add_to_startup():
+                try:
+                    icon.notify("Adicionado ao inicializador do Windows.", APP_DISPLAY)
+                except Exception:
+                    _message_box_info(APP_DISPLAY, "Adicionado ao inicializador do Windows.")
+            else:
+                try:
+                    icon.notify("Erro ao adicionar ao inicializador.", APP_DISPLAY)
+                except Exception:
+                    _message_box_info(APP_DISPLAY, "Erro ao adicionar ao inicializador.")
+
     def acao_sair(icon, item):  # noqa: ARG001
         stop_event.set()
         try:
@@ -335,10 +420,12 @@ def executar_com_tray(base_dir: Path, intervalo_minutos: int) -> int:
 
     # Criar ícone e menu
     image = _generate_tray_icon_image()
+    startup_text = "Remover do inicializador" if _is_in_startup() else "Adicionar ao inicializador"
     menu = Menu(
         MenuItem("Verificar agora", acao_verificar_agora),
         MenuItem("Abrir pasta", acao_abrir_pasta),
         MenuItem("Abrir log", acao_abrir_log),
+        MenuItem(startup_text, acao_startup),
         MenuItem("Sair", acao_sair),
     )
     icon = pystray.Icon(name=APP_NAME.lower(), title=APP_DISPLAY, icon=image, menu=menu)
@@ -349,6 +436,10 @@ def executar_com_tray(base_dir: Path, intervalo_minutos: int) -> int:
                 icon_.visible = True
             except Exception:
                 pass
+            # Adiciona automaticamente ao inicializador na primeira execução
+            if not _is_in_startup():
+                _add_to_startup()
+                logging.info("Adicionado automaticamente ao inicializador do Windows.")
             # Notifica que iniciou com sucesso, com fallbacks
             notified = False
             try:
